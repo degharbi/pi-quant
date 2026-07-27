@@ -12,6 +12,9 @@ import numpy as np
 from local_data import load_bars
 from local_data import make_instrument
 from local_data import make_selection
+from strategy_workspace import load_manifest
+from strategy_workspace import load_strategy as load_workspace_strategy
+from strategy_workspace import record_run
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.models import FixedFeeModel
 from nautilus_trader.config import BacktestEngineConfig, LoggingConfig
@@ -21,18 +24,30 @@ from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
 
 
-RESULTS_PATH = Path(__file__).resolve().parent / "backtest_results.json"
+PROJECT_ROOT = Path(__file__).resolve().parent
+LEGACY_RESULTS_PATH = PROJECT_ROOT / "backtest_results.json"
 
 
-def _load_strategy(
-    module_name: str,
+def _load_strategy_module(
+    *,
+    workspace: str | None,
+    strategy_module: str,
     strategy_class: str,
     config_class: str,
     config_values: dict[str, Any],
 ):
-    if not module_name.replace("_", "").replace(".", "").isalnum():
+    if workspace:
+        manifest = load_manifest(workspace)
+        return load_workspace_strategy(
+            workspace,
+            strategy_class or manifest["strategy_class"],
+            config_class or manifest["config_class"],
+            config_values,
+        )
+
+    if not strategy_module.replace("_", "").replace(".", "").isalnum():
         raise ValueError("Strategy module must be a Python dotted module path")
-    module = importlib.import_module(module_name)
+    module = importlib.import_module(strategy_module)
     strategy_type = getattr(module, strategy_class)
     config_type = getattr(module, config_class)
     return strategy_type(config=config_type(**config_values))
@@ -106,9 +121,10 @@ def run_backtest(
     timeframe: str,
     start: str,
     end: str,
-    strategy_module: str = "strategy",
-    strategy_class: str = "EMACrossStrategy",
-    config_class: str = "EMACrossConfig",
+    workspace: str | None = None,
+    strategy_module: str = "examples.ema_cross",
+    strategy_class: str | None = None,
+    config_class: str | None = None,
     strategy_params: dict[str, Any] | None = None,
     instrument_specs: dict[str, dict[str, Any]] | None = None,
     source_timeframe: str | None = None,
@@ -123,6 +139,14 @@ def run_backtest(
         raise ValueError("starting_balance must be positive")
     if commission < 0:
         raise ValueError("commission cannot be negative")
+
+    manifest = load_manifest(workspace) if workspace else None
+    if workspace:
+        strategy_class_name = strategy_class or manifest["strategy_class"]
+        config_class_name = config_class or manifest["config_class"]
+    else:
+        strategy_class_name = strategy_class or "EMACrossStrategy"
+        config_class_name = config_class or "EMACrossConfig"
 
     tickers = [value.strip() for value in ticker.split(",") if value.strip()]
     if not tickers:
@@ -210,19 +234,21 @@ def run_backtest(
         "trade_size": Decimal(trade_size),
         **(strategy_params or {}),
     }
-    strategy = _load_strategy(
-        strategy_module,
-        strategy_class,
-        config_class,
-        config_values,
+    strategy = _load_strategy_module(
+        workspace=workspace,
+        strategy_module=strategy_module,
+        strategy_class=strategy_class_name,
+        config_class=config_class_name,
+        config_values=config_values,
     )
     engine.add_strategy(strategy)
     engine.run()
 
     request = {
-        "strategy_module": strategy_module,
-        "strategy_class": strategy_class,
-        "config_class": config_class,
+        "workspace": workspace,
+        "strategy_module": strategy_module if not workspace else f"strategies/{workspace}/strategy.py",
+        "strategy_class": strategy_class_name,
+        "config_class": config_class_name,
         "strategy_params": strategy_params or {},
         "instrument_specs": instrument_specs,
         "source_timeframe": source_timeframe,
@@ -232,7 +258,10 @@ def run_backtest(
         "commission_per_order": str(commission),
     }
     result = _metrics(engine, primary_meta, request)
-    RESULTS_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    if workspace:
+        record_run(workspace, result)
+    else:
+        LEGACY_RESULTS_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
     engine.dispose()
     return result
 
@@ -241,6 +270,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a Nautilus backtest using only project-local Parquet data.",
     )
+    parser.add_argument("--workspace", help="UUID strategy workspace under ./strategies")
     parser.add_argument("--ticker", required=True, help="Discovered ticker or comma-separated tickers")
     parser.add_argument("--timeframe", required=True, help="Requested strategy timeframe")
     parser.add_argument("--source-timeframe", help="Optional finer local timeframe to resample")
@@ -248,13 +278,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--instrument-specs",
         required=True,
-        help="JSON object keyed by ticker with venue, exchange, currency, price_increment, and contract_multiplier",
+        help="JSON object keyed by ticker with instrument metadata",
     )
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
-    parser.add_argument("--strategy-module", default="strategy")
-    parser.add_argument("--strategy-class", default="EMACrossStrategy")
-    parser.add_argument("--config-class", default="EMACrossConfig")
+    parser.add_argument("--strategy-module", default="examples.ema_cross")
+    parser.add_argument("--strategy-class")
+    parser.add_argument("--config-class")
     parser.add_argument("--strategy-params", default="{}")
     parser.add_argument("--trade-size", type=int, default=1)
     parser.add_argument("--starting-balance", default="100000")
@@ -269,6 +299,7 @@ if __name__ == "__main__":
         timeframe=args.timeframe,
         start=args.start,
         end=args.end,
+        workspace=args.workspace,
         strategy_module=args.strategy_module,
         strategy_class=args.strategy_class,
         config_class=args.config_class,

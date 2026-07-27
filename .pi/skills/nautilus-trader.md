@@ -15,6 +15,18 @@ description: Designs, codes, and evaluates NautilusTrader strategies using dynam
 - Inspect the `Symbol` column and user request to identify instrument type. If symbols roll through contracts, treat the file as a continuous research series and disclose roll limitations.
 - Read [../knowledge/data-contract.md](../knowledge/data-contract.md) before changing data-loading code.
 
+## Workspace contract
+
+Every new strategy starts in its own UUID folder under `./strategies/`.
+
+1. Call `create_strategy_workspace` after the brief is confirmed.
+2. Implement code only in `strategies/{uuid}/strategy.py`.
+3. Save charts, notes, exports, and diagnostics in `strategies/{uuid}/artifacts/`.
+4. Run backtests with `run_nautilus_backtest` and the same `workspace_id`.
+5. Do not create new strategies in the repo root or `examples/`.
+
+Read [../knowledge/workspace.md](../knowledge/workspace.md) before creating or editing strategy workspaces.
+
 ## Intake gate
 
 Before writing code, obtain explicit answers for:
@@ -46,19 +58,24 @@ Do not invent missing trading parameters. Ask one compact set of questions, or d
 - Close or preserve end-of-run positions according to the user's stated policy.
 - Keep strategy-specific values in config so parameter sweeps do not require code edits.
 
-The shared runner dynamically loads the module, strategy class, and config class. Pass strategy-only fields through `strategy_params_json`; it supplies `instrument_id`, `bar_type`, and `trade_size`.
+The shared runner loads `strategies/{uuid}/strategy.py` when `--workspace` / `workspace_id` is provided. Pass strategy-only fields through `strategy_params_json`; it supplies `instrument_id`, `bar_type`, and `trade_size`.
+
+Use `examples/` only as reference patterns. Never write new user strategies there.
 
 ## Backtest workflow
 
 1. Call `inspect_local_market_data`.
-2. Select the requested market. Prefer an exact stored timeframe; otherwise select a finer source and resample to the coarser strategy timeframe.
-3. Never upsample coarse bars into finer bars. Never resample from external data.
-4. Read [../knowledge/nautilus-api.md](../knowledge/nautilus-api.md) and [../knowledge/strategy-patterns.md](../knowledge/strategy-patterns.md).
-5. Implement the strategy.
-6. Run a short smoke backtest on the requested dataset and range.
-7. Run the full requested range only after the smoke run succeeds.
-8. Report source and resulting timeframes, resampling status, dates, bar count, costs, sizing, PnL, trades, win rate, profit factor, expectancy, drawdown, and trade Sharpe.
-9. Read [../knowledge/quant-research.md](../knowledge/quant-research.md) before interpreting or optimizing results.
+2. Confirm the strategy brief with the user.
+3. Call `create_strategy_workspace`.
+4. Implement `strategies/{uuid}/strategy.py`.
+5. Select the requested market. Prefer an exact stored timeframe; otherwise select a finer source and resample to the coarser strategy timeframe.
+6. Never upsample coarse bars into finer bars. Never resample from external data.
+7. Read [../knowledge/nautilus-api.md](../knowledge/nautilus-api.md) and [../knowledge/strategy-patterns.md](../knowledge/strategy-patterns.md).
+8. Run a short smoke backtest on the requested dataset and range.
+9. Run the full requested range only after the smoke run succeeds.
+10. Read results from `strategies/{uuid}/results/latest.json`.
+11. Report workspace id, source and resulting timeframes, resampling status, dates, bar count, costs, sizing, PnL, trades, win rate, profit factor, expectancy, drawdown, and trade Sharpe.
+12. Read [../knowledge/quant-research.md](../knowledge/quant-research.md) before interpreting or optimizing results.
 
 ## Optimization rules
 

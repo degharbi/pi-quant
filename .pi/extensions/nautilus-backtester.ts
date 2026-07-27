@@ -13,17 +13,27 @@ type DataInventory = {
   datasets: Array<{ ticker: string; timeframe: string }>;
 };
 
-async function readInventory(cwd: string, signal?: AbortSignal): Promise<DataInventory> {
+async function runPython(
+  cwd: string,
+  args: string[],
+  signal?: AbortSignal,
+): Promise<string> {
   const python = resolve(cwd, ".venv/bin/python");
-  const { stdout } = await execFileAsync(
-    python,
-    [
-      "-c",
-      "import json; from local_data import inventory; print(json.dumps(inventory()))",
-    ],
-    { cwd, signal },
+  const { stdout } = await execFileAsync(python, args, { cwd, signal });
+  return stdout;
+}
+
+async function readInventory(cwd: string, signal?: AbortSignal): Promise<DataInventory> {
+  const stdout = await runPython(
+    cwd,
+    ["-c", "import json; from local_data import inventory; print(json.dumps(inventory()))"],
+    signal,
   );
   return JSON.parse(stdout);
+}
+
+function workspaceResultsPath(cwd: string, workspaceId: string): string {
+  return join(cwd, "strategies", workspaceId, "results", "latest.json");
 }
 
 export default function (pi: ExtensionAPI) {
@@ -52,20 +62,89 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "create_strategy_workspace",
+    label: "Create Strategy Workspace",
+    description:
+      "Creates a new UUID folder under ./strategies with strategy.py, manifest.json, results/, and artifacts/. Use this before writing any new strategy.",
+    promptSnippet: "Create an isolated UUID workspace for a new strategy and its artifacts.",
+    promptGuidelines: [
+      "Call once at the start of every new strategy before creating or editing strategy code.",
+      "Write and edit strategy code only inside the returned workspace path.",
+      "Store notes, charts, exports, and auxiliary files in that workspace's artifacts/ directory.",
+      "Do not create strategy files in the repo root or examples/ for new user strategies.",
+    ],
+    parameters: Type.Object({
+      name: Type.String({ description: "Human-readable strategy name" }),
+      brief_json: Type.String({
+        description: "JSON object capturing the confirmed strategy brief",
+        default: "{}",
+      }),
+      strategy_class: Type.String({
+        description: "Strategy class name to scaffold in strategy.py",
+        default: "WorkspaceStrategy",
+      }),
+      config_class: Type.String({
+        description: "StrategyConfig class name to scaffold in strategy.py",
+        default: "WorkspaceStrategyConfig",
+      }),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      JSON.parse(params.brief_json || "{}");
+      const stdout = await runPython(
+        ctx.cwd,
+        [
+          "strategy_workspace.py",
+          "create",
+          params.name,
+          params.brief_json || "{}",
+          params.strategy_class || "WorkspaceStrategy",
+          params.config_class || "WorkspaceStrategyConfig",
+        ],
+        signal,
+      );
+      const workspace = JSON.parse(stdout);
+      ctx.ui.notify(`Created workspace ${workspace.id}`, "info");
+      return {
+        content: [{ type: "text", text: JSON.stringify(workspace, null, 2) }],
+        details: workspace,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "list_strategy_workspaces",
+    label: "List Strategy Workspaces",
+    description: "Lists UUID strategy workspaces under ./strategies with names and last-run metadata.",
+    promptSnippet: "List existing strategy workspaces.",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      const stdout = await runPython(ctx.cwd, ["strategy_workspace.py", "list"], signal);
+      const workspaces = JSON.parse(stdout);
+      return {
+        content: [{ type: "text", text: JSON.stringify(workspaces, null, 2) }],
+        details: workspaces,
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "run_nautilus_backtest",
     label: "Run Nautilus Backtest",
     description:
-      "Runs a generated Nautilus strategy against a discovered local dataset, optionally resampling finer bars into the strategy timeframe.",
+      "Runs a workspace strategy from ./strategies/{uuid}/strategy.py and writes results into that workspace.",
     promptSnippet:
-      "Run a Nautilus strategy using a validated local ticker, timeframe, date range, costs, and sizing.",
+      "Run a workspace strategy using a validated local ticker, timeframe, date range, costs, and sizing.",
     promptGuidelines: [
+      "Require a workspace created by create_strategy_workspace.",
       "Do not call until ticker, timeframe, start/end dates, entry/exit rules, position sizing, and commission assumptions are explicit.",
       "Use inspect_local_market_data first and never pass external data paths.",
       "If the requested timeframe has no exact file, choose a finer local source timeframe and resample it; never upsample coarse data.",
       "Supply verified instrument metadata instead of guessing tick size or contract multiplier.",
-      "Strategy modules must expose a StrategyConfig and Strategy compatible with the shared runner.",
     ],
     parameters: Type.Object({
+      workspace_id: Type.String({
+        description: "UUID workspace id returned by create_strategy_workspace",
+      }),
       ticker: Type.String({
         description: "Ticker discovered by inspect_local_market_data; comma-separated is supported",
       }),
@@ -79,7 +158,7 @@ export default function (pi: ExtensionAPI) {
       ),
       instrument_specs_json: Type.String({
         description:
-          'JSON keyed by ticker with instrument_type, venue, currency, price_increment, account_type, and type-specific fields such as contract_multiplier or base_currency',
+          "JSON keyed by ticker with instrument_type, venue, currency, price_increment, account_type, and type-specific fields",
       }),
       data_timezone: Type.String({
         description: "Timezone of naive timestamps in the source Parquet file",
@@ -87,24 +166,18 @@ export default function (pi: ExtensionAPI) {
       }),
       start: Type.String({ description: "Inclusive ISO-8601 backtest start" }),
       end: Type.String({ description: "Inclusive ISO-8601 backtest end" }),
-      strategy_module: Type.String({
-        description: "Python dotted module path",
-        default: "strategy",
-      }),
-      strategy_class: Type.String({
-        description: "Strategy class exported by the module",
-        default: "EMACrossStrategy",
-      }),
-      config_class: Type.String({
-        description: "StrategyConfig class exported by the module",
-        default: "EMACrossConfig",
-      }),
+      strategy_class: Type.Optional(
+        Type.String({ description: "Override strategy class; defaults to manifest.json" }),
+      ),
+      config_class: Type.Optional(
+        Type.String({ description: "Override config class; defaults to manifest.json" }),
+      ),
       strategy_params_json: Type.String({
         description: "JSON object containing strategy-specific config fields",
         default: "{}",
       }),
       trade_size: Type.Integer({
-        description: "Whole futures contracts per entry",
+        description: "Position size in valid instrument units",
         default: 1,
       }),
       starting_balance: Type.Number({
@@ -127,6 +200,8 @@ export default function (pi: ExtensionAPI) {
         JSON.parse(params.instrument_specs_json);
         const runnerArgs = [
           runner,
+          "--workspace",
+          params.workspace_id,
           "--ticker",
           params.ticker,
           "--timeframe",
@@ -139,12 +214,6 @@ export default function (pi: ExtensionAPI) {
           params.instrument_specs_json,
           "--data-timezone",
           params.data_timezone || "America/Chicago",
-          "--strategy-module",
-          params.strategy_module || "strategy",
-          "--strategy-class",
-          params.strategy_class || "EMACrossStrategy",
-          "--config-class",
-          params.config_class || "EMACrossConfig",
           "--strategy-params",
           params.strategy_params_json || "{}",
           "--trade-size",
@@ -157,16 +226,18 @@ export default function (pi: ExtensionAPI) {
         if (params.source_timeframe) {
           runnerArgs.push("--source-timeframe", params.source_timeframe);
         }
-        const { stdout, stderr } = await execFileAsync(
-          python,
-          runnerArgs,
-          {
-            cwd: ctx.cwd,
-            signal,
-            maxBuffer: 10 * 1024 * 1024,
-          },
-        );
-        const resultsPath = join(ctx.cwd, "backtest_results.json");
+        if (params.strategy_class) {
+          runnerArgs.push("--strategy-class", params.strategy_class);
+        }
+        if (params.config_class) {
+          runnerArgs.push("--config-class", params.config_class);
+        }
+        const { stdout, stderr } = await execFileAsync(python, runnerArgs, {
+          cwd: ctx.cwd,
+          signal,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        const resultsPath = workspaceResultsPath(ctx.cwd, params.workspace_id);
         const metrics = existsSync(resultsPath)
           ? JSON.parse(readFileSync(resultsPath, "utf-8"))
           : { stdout, stderr };
@@ -197,7 +268,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         await ctx.sendUserMessage(
-          "Ask me for ticker, timeframe, date range, entry and exit rules, sizing, session, and trading costs before coding.",
+          "Ask me for ticker, timeframe, date range, entry and exit rules, sizing, session, and trading costs. Then create a UUID strategy workspace before coding.",
         );
         return;
       }
@@ -276,7 +347,12 @@ export default function (pi: ExtensionAPI) {
           `- Session: ${session}`,
           `- Costs: ${costs}`,
           `- Instrument metadata: ${instrument}`,
-          "Inspect local data first. Use an exact timeframe when present; otherwise resample a finer local source (for example Daily to Weekly). State unresolved ambiguity instead of inventing parameters. Then code the strategy against the shared runner and run it.",
+          "Workflow:",
+          "1. Call create_strategy_workspace with this brief.",
+          "2. Implement strategy.py only inside the returned strategies/{uuid}/ folder.",
+          "3. Save any charts, notes, or exports to that workspace's artifacts/ directory.",
+          "4. Run run_nautilus_backtest with the workspace id.",
+          "Inspect local data first. Use an exact timeframe when present; otherwise resample a finer local source. State unresolved ambiguity instead of inventing parameters.",
         ].join("\n"),
       );
     },
@@ -297,19 +373,21 @@ function updateWidget(ctx: any, metrics: Metrics | null) {
     ctx.ui.setStatus("nautilus", "Nautilus: local data ready");
     ctx.ui.setWidget("nautilus-widget", [
       "┌───────────────────────────────────────────────────────────────┐",
-      "│ Nautilus Agent: discovered local-data workflow               │",
-      "│ /strategy: define a strategy   /backtest-data: inspect data  │",
+      "│ Pi Quant: Research assistant                                  │",
+      "│ /strategy: define brief   /backtest-data: inspect data        │",
       "└───────────────────────────────────────────────────────────────┘",
     ]);
     return;
   }
 
   const data = metrics.data || {};
+  const request = metrics.request || {};
   const pnl = Number(metrics.total_realized_pnl || 0);
   const pnlText = `${pnl >= 0 ? "+" : ""}$${pnl.toFixed(2)}`;
+  const workspace = String(request.workspace || "?").slice(0, 8);
   ctx.ui.setWidget("nautilus-widget", [
     "┌───────────────────────────────────────────────────────────────┐",
-    `│ ${String(data.ticker || "?")} ${String(data.timeframe || "?")}  ${String(data.start || "").slice(0, 10)} → ${String(data.end || "").slice(0, 10)}`.padEnd(
+    `│ ws ${workspace}  ${String(data.ticker || "?")} ${String(data.timeframe || "?")}`.padEnd(
       64,
       " ",
     ) + "│",
