@@ -25,6 +25,23 @@ def file_fingerprint(path: Path) -> dict[str, int]:
     return {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}
 
 
+def serialize_fingerprint(fingerprint: dict[str, int]) -> dict[str, str | int]:
+    return {"mtime_ns": str(fingerprint["mtime_ns"]), "size": int(fingerprint["size"])}
+
+
+def _fingerprint_mtime_ns(value: object) -> int:
+    if value is None:
+        return -1
+    return int(value)
+
+
+def fingerprints_match(stored: dict[str, Any], current: dict[str, int]) -> bool:
+    return (
+        _fingerprint_mtime_ns(stored.get("mtime_ns")) == current["mtime_ns"]
+        and int(stored.get("size", -1)) == current["size"]
+    )
+
+
 def list_data_files() -> list[Path]:
     root = data_root()
     if not root.is_dir():
@@ -101,6 +118,51 @@ def _current_fingerprints() -> dict[str, dict[str, int]]:
     return {_relative_data_path(path): file_fingerprint(path) for path in list_data_files()}
 
 
+def _fingerprint_drift(
+    profile: dict[str, Any],
+    current: dict[str, dict[str, int]],
+) -> tuple[list[str], list[str], list[str]]:
+    tracked = _profile_tracked_files(profile)
+    changed: list[str] = []
+    new_paths: list[str] = []
+    removed_paths: list[str] = []
+
+    for rel, fingerprint in current.items():
+        entry = tracked.get(rel)
+        if entry is None:
+            new_paths.append(rel)
+            continue
+        stored = entry.get("fingerprint") or {}
+        if not fingerprints_match(stored, fingerprint):
+            changed.append(rel)
+
+    for rel in tracked:
+        if rel not in current:
+            removed_paths.append(rel)
+
+    return sorted(set(changed)), sorted(new_paths), sorted(removed_paths)
+
+
+def sync_profile_fingerprints(
+    profile: dict[str, Any] | None = None,
+    current: dict[str, dict[str, int]] | None = None,
+) -> dict[str, Any]:
+    profile = profile or _load_profile()
+    if profile is None:
+        raise ValueError("Cannot sync fingerprints without data_profile.json")
+    current = current or _current_fingerprints()
+    tracked = _profile_tracked_files(profile)
+    for rel, fingerprint in current.items():
+        entry = tracked.get(rel)
+        if entry is not None:
+            entry["fingerprint"] = serialize_fingerprint(fingerprint)
+    profile["updated_at"] = _utc_now()
+    root = data_profile_path().parent
+    root.mkdir(parents=True, exist_ok=True)
+    data_profile_path().write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    return profile
+
+
 def adapter_status() -> dict[str, Any]:
     profile = _load_profile()
     adapter_exists = data_adapter_path().is_file()
@@ -126,31 +188,28 @@ def adapter_status() -> dict[str, Any]:
             "data_file_count": len(current),
         }
 
-    tracked = _profile_tracked_files(profile)
-    changed: list[str] = []
-    for rel, fingerprint in current.items():
-        entry = tracked.get(rel)
-        if entry is None:
-            changed.append(rel)
-            continue
-        stored = entry.get("fingerprint") or {}
-        if (
-            int(stored.get("mtime_ns", -1)) != fingerprint["mtime_ns"]
-            or int(stored.get("size", -1)) != fingerprint["size"]
-        ):
-            changed.append(rel)
+    changed, new_paths, removed_paths = _fingerprint_drift(profile, current)
+    if changed or new_paths or removed_paths:
+        adapter = _load_adapter_module()
+        fingerprint_only_drift = bool(changed) and not new_paths and not removed_paths
+        if fingerprint_only_drift and adapter is not None:
+            sync_profile_fingerprints(profile, current)
+            return {
+                "status": "ready",
+                "adapter_exists": True,
+                "profile_exists": True,
+                "needs_adapter": False,
+                "changed_paths": [],
+                "data_file_count": len(current),
+                "updated_at": profile.get("updated_at"),
+            }
 
-    for rel in tracked:
-        if rel not in current:
-            changed.append(rel)
-
-    if changed:
         return {
             "status": "stale",
             "adapter_exists": True,
             "profile_exists": True,
             "needs_adapter": True,
-            "changed_paths": sorted(set(changed)),
+            "changed_paths": sorted(set(changed + new_paths + removed_paths)),
             "data_file_count": len(current),
             "updated_at": profile.get("updated_at"),
         }
@@ -246,7 +305,7 @@ def probe_raw_inventory() -> dict[str, Any]:
                 "path": rel,
                 "file": path.name,
                 "size_mb": round(path.stat().st_size / 1_048_576, 2),
-                "fingerprint": fingerprint,
+                "fingerprint": serialize_fingerprint(fingerprint),
                 **_peek_file(path),
             },
         )
