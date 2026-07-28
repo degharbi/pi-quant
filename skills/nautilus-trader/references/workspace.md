@@ -6,7 +6,7 @@ Every new user strategy must live in an isolated UUID folder under `./strategies
 
 Call `create_strategy_workspace` once at the beginning of every new strategy effort, before writing code.
 
-Do not place new strategies in the repo root or under `examples/`. The `examples/` folder is reference-only.
+Do not place new strategies in the project root or under `python/examples/`. The `python/examples/` folder is reference-only.
 
 ## Folder layout
 

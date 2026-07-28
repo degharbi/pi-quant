@@ -6,3 +6,7 @@ backtest_results.json
 data/
 strategies/*
 !strategies/.gitkeep
+.pi/npm/
+.pi/git/
+.pi-quant/
+node_modules/

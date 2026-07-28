@@ -21,7 +21,7 @@ Official guidance:
 - `BacktestNode`: high-level, config-driven, streams Nautilus-native data from `ParquetDataCatalog`, and is preferred for production-shaped workflows.
 - `BacktestEngine`: low-level, direct component/data access, useful for custom loaders, quick experiments, and repeated optimization with `reset()`.
 
-This project uses `BacktestEngine` because the existing files are ordinary OHLCV Parquet tables, not a Nautilus `ParquetDataCatalog`. `local_data.py` converts selected rows into Nautilus `Bar` objects. A future migration can build a separate derived catalog, but the raw `./data` files must remain the only market-data source.
+This project uses `BacktestEngine` because user files are ordinary OHLCV tables loaded through a project-local adapter, not a Nautilus `ParquetDataCatalog`. `local_data.py` converts selected rows into Nautilus `Bar` objects via `.pi-quant/data_adapter.py`. A future migration can build a separate derived catalog, but the raw `./data` files must remain the only market-data source.
 
 ## Shared runner contract
 
@@ -34,7 +34,7 @@ This project uses `BacktestEngine` because the existing files are ordinary OHLCV
 5. dynamically imports a strategy and config;
 6. injects `instrument_id`, `bar_type`, and `trade_size`;
 7. passes strategy-specific JSON fields;
-8. writes `backtest_results.json`.
+8. writes results into the workspace (`strategies/{uuid}/results/`) or `backtest_results.json` for legacy non-workspace runs.
 
 Generated configs must accept every injected field. Class and module names are explicit tool arguments.
 

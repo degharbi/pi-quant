@@ -4,7 +4,10 @@ description: Define, implement, and evaluate a local-data Nautilus strategy in a
 
 Apply the `nautilus-trader` skill.
 
+Runtime setup (venv + deps) is automatic — never ask the user to pip install or activate a virtualenv.
+
 First call `inspect_local_market_data`. Use only market data under `./data`.
+If `needs_adapter` is true, explore the raw files, write `.pi-quant/data_adapter.py` and `.pi-quant/data_profile.json`, then re-inspect until `adapter_status` is `ready`.
 
 If the user has not specified all items below, ask for them in one compact intake:
 
@@ -32,4 +35,4 @@ After the brief is complete:
 8. State continuous-contract, timestamp, roll, fill, and cost limitations.
 9. Suggest robustness tests, not parameter changes chosen only to increase in-sample profit.
 
-Never create new strategy code in the repo root or `examples/`.
+Never create new strategy code in the project root or `python/examples/`.

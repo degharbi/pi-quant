@@ -2,17 +2,41 @@
 
 ## Allowed source
 
-All backtests must resolve data through `local_data.py`. The only allowed root is:
+All backtests must resolve data through `local_data.py` and the project-local adapter under `.pi-quant/`. The only allowed raw data root is:
 
 `<project>/data`
 
-`discover_datasets()` scans compatible `*.parquet` files, derives market and source timeframe from each filename, and validates the required OHLCV schema. Do not add arbitrary data-path parameters to agent tools or the runner.
+Do not add arbitrary data-path parameters to agent tools or the runner.
+
+## Agent-driven adapter memory
+
+On first use (or when files change), the agent explores `./data`, infers layout, and writes:
+
+- `<project>/.pi-quant/data_profile.json` — inventory, column maps, file fingerprints
+- `<project>/.pi-quant/data_adapter.py` — project-specific loader with:
+  - `list_datasets() -> list[dict]`
+  - `inspect(path) -> dict`
+  - `load_ohlcv(path, columns, start=None, end=None) -> DataFrame`
+
+`load_ohlcv()` must return canonical columns: `Date`, `Open`, `High`, `Low`, `Close`, `Volume`, `Symbol`.
+
+Raw files stay in `./data`. Do not silently convert or fetch external data.
+
+When `inspect_local_market_data` returns `needs_adapter: true`, explore files, write or update `.pi-quant/` memory, then re-inspect until `adapter_status` is `ready`.
+
+## Staleness
+
+`data_profile.json` stores `{path, mtime_ns, size}` per tracked file. The adapter is stale when:
+
+- a tracked file's fingerprint changed
+- a new file appeared under `./data`
+- a tracked file disappeared
+
+On stale: update adapter/profile, then re-inspect.
 
 ## Dynamic discovery
 
-- Columns: `Date`, `Open`, `High`, `Low`, `Close`, `Volume`, `Symbol`
-
-Use `inspect_local_market_data` for the current market list, source timeframes, row counts, and exact coverage. Never copy the current inventory into a static allowlist.
+After the adapter is ready, `discover_datasets()` uses `list_datasets()` output. Ticker and timeframe come from the profile/adapter, not from a hardcoded filename pattern.
 
 Instrument metadata is not derivable from OHLCV alone. The run must supply verified instrument type, venue, currency, price increment, account type, and type-specific fields for every selected market.
 
@@ -46,3 +70,9 @@ Every run must specify:
 - inclusive end
 
 The requested range must fit the selected source file's metadata coverage. Empty, invalid, oversized, and coarse-to-fine selections fail instead of falling back to external data.
+
+## Local memory guidance
+
+Add `.pi-quant/` to the project `.gitignore` unless the team explicitly wants to share adapter code. It is machine-local learned layout, not strategy code.
+
+See [./data-adapter-template.md](./data-adapter-template.md) for the adapter/profile shape.

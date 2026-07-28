@@ -1,19 +1,25 @@
 ---
 name: nautilus-trader
-description: Designs, codes, and evaluates NautilusTrader strategies using dynamically discovered project-local Parquet data. Use for strategy ideation, implementation, backtesting, optimization, or analysis.
+description: Designs, codes, and evaluates NautilusTrader strategies using project-local market data with agent-learned adapters. Use for strategy ideation, implementation, backtesting, optimization, or analysis.
 ---
 
 # Nautilus Strategy Workflow
 
+## Runtime (automatic)
+
+The pi-quant extension creates `.venv`, installs Python deps, and ensures `./data` / `./strategies` exist. Never ask the user to activate a venv or run `pip install`. If setup fails, report the error and that Python 3.10+ on PATH is required.
+
 ## Non-negotiable data contract
 
 - Use only files already present under `./data`.
-- Discover markets and source timeframes with `inspect_local_market_data`; never encode a fixed market allowlist in skills or scripts.
+- Call `inspect_local_market_data` before proposing tickers, timeframes, or dates.
+- If `needs_adapter` is true, explore `./data`, write `.pi-quant/data_adapter.py` and `.pi-quant/data_profile.json`, then re-inspect until `adapter_status` is `ready`.
+- Discover markets and source timeframes from the adapter inventory; never encode a fixed market allowlist in skills or scripts.
 - The strategy timeframe can differ from the stored timeframe. Aggregate finer local bars into coarser bars when needed.
 - Never download data, generate synthetic data, silently resample data, or read an arbitrary path.
 - Always inspect coverage before selecting dates.
 - Inspect the `Symbol` column and user request to identify instrument type. If symbols roll through contracts, treat the file as a continuous research series and disclose roll limitations.
-- Read [../knowledge/data-contract.md](../knowledge/data-contract.md) before changing data-loading code.
+- Read [./references/data-contract.md](./references/data-contract.md) and [./references/data-adapter-template.md](./references/data-adapter-template.md) before changing data-loading code.
 
 ## Workspace contract
 
@@ -23,9 +29,9 @@ Every new strategy starts in its own UUID folder under `./strategies/`.
 2. Implement code only in `strategies/{uuid}/strategy.py`.
 3. Save charts, notes, exports, and diagnostics in `strategies/{uuid}/artifacts/`.
 4. Run backtests with `run_nautilus_backtest` and the same `workspace_id`.
-5. Do not create new strategies in the repo root or `examples/`.
+5. Do not create new strategies in the project root or `python/examples/`.
 
-Read [../knowledge/workspace.md](../knowledge/workspace.md) before creating or editing strategy workspaces.
+Read [./references/workspace.md](./references/workspace.md) before creating or editing strategy workspaces.
 
 ## Intake gate
 
@@ -60,22 +66,22 @@ Do not invent missing trading parameters. Ask one compact set of questions, or d
 
 The shared runner loads `strategies/{uuid}/strategy.py` when `--workspace` / `workspace_id` is provided. Pass strategy-only fields through `strategy_params_json`; it supplies `instrument_id`, `bar_type`, and `trade_size`.
 
-Use `examples/` only as reference patterns. Never write new user strategies there.
+Use `python/examples/` only as reference patterns. Never write new user strategies there.
 
 ## Backtest workflow
 
-1. Call `inspect_local_market_data`.
+1. Call `inspect_local_market_data`. If `needs_adapter`, explore `./data` and write `.pi-quant/` memory first.
 2. Confirm the strategy brief with the user.
 3. Call `create_strategy_workspace`.
 4. Implement `strategies/{uuid}/strategy.py`.
 5. Select the requested market. Prefer an exact stored timeframe; otherwise select a finer source and resample to the coarser strategy timeframe.
 6. Never upsample coarse bars into finer bars. Never resample from external data.
-7. Read [../knowledge/nautilus-api.md](../knowledge/nautilus-api.md) and [../knowledge/strategy-patterns.md](../knowledge/strategy-patterns.md).
+7. Read [./references/nautilus-api.md](./references/nautilus-api.md) and [./references/strategy-patterns.md](./references/strategy-patterns.md).
 8. Run a short smoke backtest on the requested dataset and range.
 9. Run the full requested range only after the smoke run succeeds.
 10. Read results from `strategies/{uuid}/results/latest.json`.
 11. Report workspace id, source and resulting timeframes, resampling status, dates, bar count, costs, sizing, PnL, trades, win rate, profit factor, expectancy, drawdown, and trade Sharpe.
-12. Read [../knowledge/quant-research.md](../knowledge/quant-research.md) before interpreting or optimizing results.
+12. Read [./references/quant-research.md](./references/quant-research.md) before interpreting or optimizing results.
 
 ## Optimization rules
 
@@ -91,8 +97,8 @@ Use `examples/` only as reference patterns. Never write new user strategies ther
 
 When API behavior is uncertain, use this order:
 
-1. Installed package source under `.venv/lib/python3.10/site-packages/nautilus_trader`.
-2. Curated local notes under `.pi/knowledge`.
+1. Installed package source under `./.venv` (`site-packages/nautilus_trader`).
+2. Curated local notes under this skill's `references/`.
 3. Current official docs and upstream GitHub examples linked in those notes.
 
 The website's `latest` docs can target a newer Python/package generation than the installed environment. Verify imports and constructor signatures locally before coding.
