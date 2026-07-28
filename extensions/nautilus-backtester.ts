@@ -18,12 +18,16 @@ type Metrics = Record<string, any>;
 type DataInventory = {
   tickers: string[];
   datasets: Array<{ ticker: string; timeframe: string }>;
+  adapter_status?: string;
+  needs_adapter?: boolean;
+  raw_files?: Array<{ path: string; file: string }>;
 };
 type RuntimeState = {
   python: string;
   createdVenv: boolean;
   installedDeps: boolean;
-  parquetCount: number;
+  dataFileCount: number;
+  adapterReady: boolean;
 };
 
 const runtimeByCwd = new Map<string, Promise<RuntimeState>>();
@@ -114,13 +118,50 @@ async function depsReady(python: string, cwd: string, signal?: AbortSignal): Pro
   }
 }
 
-function countParquet(cwd: string): number {
+function countDataFiles(cwd: string): number {
   const dataDir = join(cwd, "data");
   if (!existsSync(dataDir)) return 0;
   try {
-    return readdirSync(dataDir).filter((name) => name.toLowerCase().endsWith(".parquet")).length;
+    const walk = (dir: string): number => {
+      let total = 0;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name.startsWith(".")) continue;
+        const fullPath = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          total += walk(fullPath);
+        } else if (entry.isFile()) {
+          total += 1;
+        }
+      }
+      return total;
+    };
+    return walk(dataDir);
   } catch {
     return 0;
+  }
+}
+
+async function readAdapterStatus(
+  python: string,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<{ dataFileCount: number; adapterReady: boolean }> {
+  try {
+    const { stdout } = await execCapture(
+      python,
+      [
+        "-c",
+        "import json; from data_memory import adapter_status; print(json.dumps(adapter_status()))",
+      ],
+      { cwd, env: pythonEnv(cwd), signal },
+    );
+    const status = JSON.parse(stdout);
+    return {
+      dataFileCount: Number(status.data_file_count || 0),
+      adapterReady: status.status === "ready",
+    };
+  } catch {
+    return { dataFileCount: countDataFiles(cwd), adapterReady: false };
   }
 }
 
@@ -187,7 +228,7 @@ async function ensureRuntime(
       python,
       createdVenv,
       installedDeps,
-      parquetCount: countParquet(cwd),
+      ...(await readAdapterStatus(python, cwd, signal)),
     };
   })();
 
@@ -243,9 +284,14 @@ export default function (pi: ExtensionAPI) {
       setBusy(ctx, "Preparing pi-quant runtime...");
       const runtime = await ensureRuntime(ctx.cwd, ctx);
       updateWidget(ctx, null, runtime);
-      if (runtime.parquetCount === 0) {
+      if (runtime.dataFileCount === 0) {
         ctx.ui.notify(
-          "Add Parquet files under ./data (e.g. ES_Daily.parquet), then ask for a strategy.",
+          "Add market data files under ./data, then ask for a strategy.",
+          "warning",
+        );
+      } else if (!runtime.adapterReady) {
+        ctx.ui.notify(
+          "Data files found — explore ./data and write .pi-quant/data_adapter.py before backtesting.",
           "warning",
         );
       } else if (runtime.createdVenv || runtime.installedDeps) {
@@ -267,10 +313,11 @@ export default function (pi: ExtensionAPI) {
     name: "inspect_local_market_data",
     label: "Inspect Local Market Data",
     description:
-      "Discovers project-local Parquet datasets under ./data, including markets, source timeframes, coverage, and resampling support. Ensures the local Python runtime is ready first.",
+      "Discovers project-local datasets under ./data via the project adapter when ready, or returns a raw probe plus adapter_status when memory is missing or stale. Ensures the local Python runtime is ready first.",
     promptSnippet: "Inspect available local data before proposing or running a backtest.",
     promptGuidelines: [
       "Call this before coding a strategy when ticker, timeframe, or date coverage is unknown.",
+      "If needs_adapter is true, explore ./data, write .pi-quant/data_adapter.py and .pi-quant/data_profile.json, then re-inspect.",
       "Never download, generate, substitute, or load market data outside ./data.",
       "Do not ask the user to create a venv or pip install — the extension does that automatically.",
     ],
@@ -379,6 +426,8 @@ export default function (pi: ExtensionAPI) {
       "Require a workspace created by create_strategy_workspace.",
       "Do not call until ticker, timeframe, start/end dates, entry/exit rules, position sizing, and commission assumptions are explicit.",
       "Use inspect_local_market_data first and never pass external data paths.",
+      "Do not call until the project data adapter is ready (adapter_status=ready).",
+      "If needs_adapter is true, explore ./data and write .pi-quant/data_adapter.py plus data_profile.json before backtesting.",
       "If the requested timeframe has no exact file, choose a finer local source timeframe and resample it; never upsample coarse data.",
       "Supply verified instrument metadata instead of guessing tick size or contract multiplier.",
     ],
@@ -402,7 +451,7 @@ export default function (pi: ExtensionAPI) {
           "JSON keyed by ticker with instrument_type, venue, currency, price_increment, account_type, and type-specific fields",
       }),
       data_timezone: Type.String({
-        description: "Timezone of naive timestamps in the source Parquet file",
+        description: "Timezone of naive timestamps in the source market data files",
         default: "America/Chicago",
       }),
       start: Type.String({ description: "Inclusive ISO-8601 backtest start" }),
@@ -434,6 +483,14 @@ export default function (pi: ExtensionAPI) {
       const fastLabel = `${params.ticker} ${params.timeframe}`;
       try {
         const runtime = await ensureRuntime(ctx.cwd, ctx, signal);
+        const inventory = await readInventory(ctx.cwd, signal, ctx);
+        if (inventory.needs_adapter) {
+          return toolError(
+            inventory.adapter_status === "stale"
+              ? "Project data adapter is stale. Explore ./data, update .pi-quant/data_adapter.py and .pi-quant/data_profile.json, then re-inspect before backtesting."
+              : "Project data adapter is missing. Explore ./data, write .pi-quant/data_adapter.py and .pi-quant/data_profile.json, then re-inspect before backtesting.",
+          );
+        }
         const runner = join(PYTHON_DIR, "run_backtest.py");
         ctx.ui.setStatus("nautilus", `Running ${fastLabel} backtest...`);
 
@@ -513,9 +570,18 @@ export default function (pi: ExtensionAPI) {
       }
 
       const inventory = await readInventory(ctx.cwd, undefined, ctx);
+      if (inventory.needs_adapter) {
+        ctx.ui.notify(
+          inventory.adapter_status === "stale"
+            ? "Data adapter is stale. Explore ./data, update .pi-quant/ memory, then retry /strategy."
+            : "Data files found but no adapter yet. Explore ./data, write .pi-quant/data_adapter.py, then retry /strategy.",
+          "error",
+        );
+        return;
+      }
       if (!inventory.tickers.length) {
         ctx.ui.notify(
-          "No compatible Parquet datasets in ./data. Add files like ES_Daily.parquet, then retry /strategy.",
+          "No datasets resolved from ./data. Inspect files and update the project data adapter, then retry /strategy.",
           "error",
         );
         return;
@@ -612,13 +678,18 @@ export default function (pi: ExtensionAPI) {
 
 function updateWidget(ctx: any, metrics: Metrics | null, runtime?: RuntimeState) {
   if (!metrics) {
-    const files = runtime?.parquetCount ?? 0;
+    const files = runtime?.dataFileCount ?? 0;
+    const adapterReady = runtime?.adapterReady ?? false;
     const dataLine =
-      files > 0
-        ? `│ ${files} Parquet file(s) in ./data — ready for /strategy`.padEnd(64, " ").slice(0, 64) +
-          "│"
-        : "│ Drop Parquet files into ./data, then ask for a strategy      │";
-    ctx.ui.setStatus("nautilus", files > 0 ? "Nautilus: ready" : "Nautilus: waiting for data");
+      files === 0
+        ? "│ Drop market data into ./data, then ask for a strategy       │"
+        : adapterReady
+          ? `│ ${files} data file(s) — adapter ready for /strategy`.padEnd(64, " ").slice(0, 64) + "│"
+          : `│ ${files} data file(s) — write .pi-quant adapter first`.padEnd(64, " ").slice(0, 64) + "│";
+    ctx.ui.setStatus(
+      "nautilus",
+      files === 0 ? "Nautilus: waiting for data" : adapterReady ? "Nautilus: ready" : "Nautilus: needs adapter",
+    );
     ctx.ui.setWidget("nautilus-widget", [
       "┌───────────────────────────────────────────────────────────────┐",
       "│ Pi Quant: Research assistant                                  │",

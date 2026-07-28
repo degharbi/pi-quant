@@ -1,7 +1,7 @@
 {
   "name": "pi-quant",
   "version": "0.1.0",
-  "description": "NautilusTrader strategy research lab for Pi — local Parquet backtests with UUID workspaces",
+  "description": "NautilusTrader strategy research lab for Pi — local data backtests with agent-learned adapters and UUID workspaces",
   "keywords": ["pi-package", "nautilus", "backtest", "quant"],
   "license": "UNLICENSED",
   "files": [

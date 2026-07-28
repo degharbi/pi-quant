@@ -25,3 +25,15 @@ def data_root() -> Path:
 
 def strategies_root() -> Path:
     return (project_root() / "strategies").resolve()
+
+
+def pi_quant_root() -> Path:
+    return (project_root() / ".pi-quant").resolve()
+
+
+def data_profile_path() -> Path:
+    return pi_quant_root() / "data_profile.json"
+
+
+def data_adapter_path() -> Path:
+    return pi_quant_root() / "data_adapter.py"

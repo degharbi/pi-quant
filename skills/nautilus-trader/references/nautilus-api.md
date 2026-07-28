@@ -21,7 +21,7 @@ Official guidance:
 - `BacktestNode`: high-level, config-driven, streams Nautilus-native data from `ParquetDataCatalog`, and is preferred for production-shaped workflows.
 - `BacktestEngine`: low-level, direct component/data access, useful for custom loaders, quick experiments, and repeated optimization with `reset()`.
 
-This project uses `BacktestEngine` because the existing files are ordinary OHLCV Parquet tables, not a Nautilus `ParquetDataCatalog`. `local_data.py` converts selected rows into Nautilus `Bar` objects. A future migration can build a separate derived catalog, but the raw `./data` files must remain the only market-data source.
+This project uses `BacktestEngine` because user files are ordinary OHLCV tables loaded through a project-local adapter, not a Nautilus `ParquetDataCatalog`. `local_data.py` converts selected rows into Nautilus `Bar` objects via `.pi-quant/data_adapter.py`. A future migration can build a separate derived catalog, but the raw `./data` files must remain the only market-data source.
 
 ## Shared runner contract
 

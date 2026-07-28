@@ -6,8 +6,11 @@ from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
-import pyarrow.parquet as pq
 
+from data_memory import adapter_inspect
+from data_memory import adapter_load_ohlcv
+from data_memory import inventory as data_inventory
+from data_memory import require_adapter_ready
 from nautilus_trader.model.currencies import Currency
 from nautilus_trader.model.data import Bar, BarType
 from nautilus_trader.model.enums import AssetClass
@@ -114,25 +117,34 @@ def parse_timeframe(value: str) -> Timeframe:
     )
 
 
-def discover_datasets() -> list[LocalDataset]:
-    datasets: list[LocalDataset] = []
-    root = data_root()
-    if not root.is_dir():
-        return datasets
+def _resolve_dataset_path(rel_path: str) -> Path:
+    candidate = Path(rel_path)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    direct = (data_root() / candidate).resolve()
+    if direct.exists():
+        return direct
+    return (project_root() / candidate).resolve()
 
-    for path in sorted(root.glob("*.parquet")):
-        parts = path.stem.rsplit("_", 1)
-        if len(parts) != 2:
+
+def discover_datasets() -> list[LocalDataset]:
+    require_adapter_ready()
+    payload = data_inventory()
+    datasets: list[LocalDataset] = []
+    for item in payload.get("datasets", []):
+        ticker = str(item.get("ticker", "")).strip()
+        timeframe = str(item.get("timeframe", "")).strip()
+        rel_path = str(item.get("path", item.get("file", ""))).strip()
+        if not ticker or not timeframe or not rel_path:
             continue
-        ticker, timeframe = parts
         try:
             parse_timeframe(timeframe)
-            parquet = pq.ParquetFile(path)
+            path = _resolve_dataset_path(rel_path)
         except (ValueError, OSError):
             continue
-        if not REQUIRED_COLUMNS.issubset(parquet.schema.names):
+        if not path.is_file():
             continue
-        datasets.append(LocalDataset(ticker=ticker, timeframe=timeframe, path=path.resolve()))
+        datasets.append(LocalDataset(ticker=ticker, timeframe=timeframe, path=path))
     return datasets
 
 
@@ -248,42 +260,12 @@ def _as_utc(value: str, data_timezone: str) -> pd.Timestamp:
 
 
 def inspect_file(path: Path) -> dict:
-    parquet = pq.ParquetFile(path)
-    date_index = parquet.schema.names.index("Date")
-    stats = parquet.metadata.row_group(0).column(date_index).statistics
-    if stats is None or not stats.has_min_max:
-        dates = pd.read_parquet(path, columns=["Date"])["Date"]
-        start, end = dates.min(), dates.max()
-    else:
-        start, end = stats.min, stats.max
-    return {
-        "file": path.name,
-        "rows": parquet.metadata.num_rows,
-        "start": str(start),
-        "end": str(end),
-        "size_mb": round(path.stat().st_size / 1_048_576, 2),
-    }
+    require_adapter_ready()
+    return adapter_inspect(path)
 
 
 def inventory() -> dict:
-    datasets = [
-        {
-            "ticker": dataset.ticker,
-            "timeframe": dataset.timeframe,
-            **inspect_file(dataset.path),
-        }
-        for dataset in discover_datasets()
-    ]
-    return {
-        "data_root": str(data_root()),
-        "tickers": sorted({item["ticker"] for item in datasets}),
-        "datasets": datasets,
-        "resampling": {
-            "supported": True,
-            "examples": ["Daily to Weekly", "Daily to Monthly", "1min to 15min"],
-            "rule": "Only aggregate a finer local timeframe into a coarser requested timeframe.",
-        },
-    }
+    return data_inventory()
 
 
 def _resample(
@@ -320,15 +302,14 @@ def load_bars(
     price_precision: int,
     max_rows: int = 1_000_000,
 ) -> tuple[list[Bar], dict]:
+    require_adapter_ready()
     local_start = selection.start.tz_convert(selection.data_timezone).tz_localize(None)
     local_end = selection.end.tz_convert(selection.data_timezone).tz_localize(None)
-    frame = pd.read_parquet(
+    frame = adapter_load_ohlcv(
         selection.source.path,
         columns=["Date", "Open", "High", "Low", "Close", "Volume", "Symbol"],
-        filters=[
-            ("Date", ">=", local_start.to_pydatetime()),
-            ("Date", "<=", local_end.to_pydatetime()),
-        ],
+        start=local_start,
+        end=local_end,
     ).rename(columns=str.lower)
     frame["date"] = (
         pd.to_datetime(frame["date"])

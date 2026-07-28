@@ -1,6 +1,6 @@
 ---
 name: nautilus-trader
-description: Designs, codes, and evaluates NautilusTrader strategies using dynamically discovered project-local Parquet data. Use for strategy ideation, implementation, backtesting, optimization, or analysis.
+description: Designs, codes, and evaluates NautilusTrader strategies using project-local market data with agent-learned adapters. Use for strategy ideation, implementation, backtesting, optimization, or analysis.
 ---
 
 # Nautilus Strategy Workflow
@@ -12,12 +12,14 @@ The pi-quant extension creates `.venv`, installs Python deps, and ensures `./dat
 ## Non-negotiable data contract
 
 - Use only files already present under `./data`.
-- Discover markets and source timeframes with `inspect_local_market_data`; never encode a fixed market allowlist in skills or scripts.
+- Call `inspect_local_market_data` before proposing tickers, timeframes, or dates.
+- If `needs_adapter` is true, explore `./data`, write `.pi-quant/data_adapter.py` and `.pi-quant/data_profile.json`, then re-inspect until `adapter_status` is `ready`.
+- Discover markets and source timeframes from the adapter inventory; never encode a fixed market allowlist in skills or scripts.
 - The strategy timeframe can differ from the stored timeframe. Aggregate finer local bars into coarser bars when needed.
 - Never download data, generate synthetic data, silently resample data, or read an arbitrary path.
 - Always inspect coverage before selecting dates.
 - Inspect the `Symbol` column and user request to identify instrument type. If symbols roll through contracts, treat the file as a continuous research series and disclose roll limitations.
-- Read [./references/data-contract.md](./references/data-contract.md) before changing data-loading code.
+- Read [./references/data-contract.md](./references/data-contract.md) and [./references/data-adapter-template.md](./references/data-adapter-template.md) before changing data-loading code.
 
 ## Workspace contract
 
@@ -68,7 +70,7 @@ Use `python/examples/` only as reference patterns. Never write new user strategi
 
 ## Backtest workflow
 
-1. Call `inspect_local_market_data`.
+1. Call `inspect_local_market_data`. If `needs_adapter`, explore `./data` and write `.pi-quant/` memory first.
 2. Confirm the strategy brief with the user.
 3. Call `create_strategy_workspace`.
 4. Implement `strategies/{uuid}/strategy.py`.

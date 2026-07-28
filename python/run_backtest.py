@@ -265,7 +265,7 @@ def run_backtest(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a Nautilus backtest using only project-local Parquet data.",
+        description="Run a Nautilus backtest using only project-local market data via the project adapter.",
     )
     parser.add_argument("--workspace", help="UUID strategy workspace under ./strategies")
     parser.add_argument("--ticker", required=True, help="Discovered ticker or comma-separated tickers")

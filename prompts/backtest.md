@@ -7,6 +7,7 @@ Apply the `nautilus-trader` skill.
 Runtime setup (venv + deps) is automatic — never ask the user to pip install or activate a virtualenv.
 
 First call `inspect_local_market_data`. Use only market data under `./data`.
+If `needs_adapter` is true, explore the raw files, write `.pi-quant/data_adapter.py` and `.pi-quant/data_profile.json`, then re-inspect until `adapter_status` is `ready`.
 
 If the user has not specified all items below, ask for them in one compact intake:
 
