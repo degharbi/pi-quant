@@ -4,7 +4,6 @@ import argparse
 import importlib
 import json
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -12,6 +11,7 @@ import numpy as np
 from local_data import load_bars
 from local_data import make_instrument
 from local_data import make_selection
+from project_paths import project_root
 from strategy_workspace import load_manifest
 from strategy_workspace import load_strategy as load_workspace_strategy
 from strategy_workspace import record_run
@@ -22,10 +22,6 @@ from nautilus_trader.model.currencies import Currency
 from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-LEGACY_RESULTS_PATH = PROJECT_ROOT / "backtest_results.json"
 
 
 def _load_strategy_module(
@@ -261,7 +257,8 @@ def run_backtest(
     if workspace:
         record_run(workspace, result)
     else:
-        LEGACY_RESULTS_PATH.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        legacy = project_root() / "backtest_results.json"
+        legacy.write_text(json.dumps(result, indent=2), encoding="utf-8")
     engine.dispose()
     return result
 

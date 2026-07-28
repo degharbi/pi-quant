@@ -1,0 +1,4 @@
+nautilus_trader
+pandas
+pyarrow
+numpy

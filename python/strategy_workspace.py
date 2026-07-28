@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-STRATEGIES_ROOT = (PROJECT_ROOT / "strategies").resolve()
+from project_paths import project_root, strategies_root
+
 UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -62,8 +62,9 @@ def validate_workspace_id(workspace_id: str) -> str:
 
 def workspace_dir(workspace_id: str) -> Path:
     workspace_id = validate_workspace_id(workspace_id)
-    path = (STRATEGIES_ROOT / workspace_id).resolve()
-    if path.parent != STRATEGIES_ROOT:
+    root = strategies_root()
+    path = (root / workspace_id).resolve()
+    if path.parent != root:
         raise ValueError("Workspace path escapes strategies root")
     if not path.is_dir():
         raise FileNotFoundError(f"Strategy workspace not found: {workspace_id}")
@@ -116,15 +117,17 @@ def create_workspace(
     if not name.strip():
         raise ValueError("Workspace name is required")
 
-    STRATEGIES_ROOT.mkdir(parents=True, exist_ok=True)
+    strategies = strategies_root()
+    strategies.mkdir(parents=True, exist_ok=True)
     workspace_id = str(uuid.uuid4())
-    root = (STRATEGIES_ROOT / workspace_id).resolve()
-    if root.parent != STRATEGIES_ROOT:
+    root = (strategies / workspace_id).resolve()
+    if root.parent != strategies:
         raise ValueError("Workspace path escapes strategies root")
     root.mkdir(parents=True)
     (root / "results").mkdir()
     (root / "artifacts").mkdir()
 
+    project = project_root()
     manifest = {
         "id": workspace_id,
         "name": name.strip(),
@@ -134,7 +137,7 @@ def create_workspace(
         "strategy_class": strategy_class,
         "config_class": config_class,
         "paths": {
-            "root": str(root.relative_to(PROJECT_ROOT)),
+            "root": str(root.relative_to(project)),
             "strategy": "strategy.py",
             "results": "results/",
             "artifacts": "artifacts/",
@@ -154,16 +157,18 @@ def create_workspace(
 
     return {
         "id": workspace_id,
-        "path": str(root.relative_to(PROJECT_ROOT)),
+        "path": str(root.relative_to(project)),
         "manifest": manifest,
     }
 
 
 def list_workspaces() -> list[dict[str, Any]]:
-    if not STRATEGIES_ROOT.is_dir():
+    strategies = strategies_root()
+    if not strategies.is_dir():
         return []
+    project = project_root()
     workspaces: list[dict[str, Any]] = []
-    for path in sorted(STRATEGIES_ROOT.iterdir()):
+    for path in sorted(strategies.iterdir()):
         if not path.is_dir():
             continue
         manifest_file = path / "manifest.json"
@@ -179,7 +184,7 @@ def list_workspaces() -> list[dict[str, Any]]:
                 "name": manifest.get("name", path.name),
                 "created_at": manifest.get("created_at"),
                 "last_run": manifest.get("last_run"),
-                "path": str(path.relative_to(PROJECT_ROOT)),
+                "path": str(path.relative_to(project)),
             },
         )
     return workspaces

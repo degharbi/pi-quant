@@ -1,0 +1,25 @@
+{
+  "name": "pi-quant",
+  "version": "0.1.0",
+  "description": "NautilusTrader strategy research lab for Pi — local Parquet backtests with UUID workspaces",
+  "keywords": ["pi-package", "nautilus", "backtest", "quant"],
+  "license": "UNLICENSED",
+  "files": [
+    "extensions",
+    "skills",
+    "prompts",
+    "python"
+  ],
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

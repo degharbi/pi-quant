@@ -34,7 +34,7 @@ This project uses `BacktestEngine` because the existing files are ordinary OHLCV
 5. dynamically imports a strategy and config;
 6. injects `instrument_id`, `bar_type`, and `trade_size`;
 7. passes strategy-specific JSON fields;
-8. writes `backtest_results.json`.
+8. writes results into the workspace (`strategies/{uuid}/results/`) or `backtest_results.json` for legacy non-workspace runs.
 
 Generated configs must accept every injected field. Class and module names are explicit tool arguments.
 

@@ -15,9 +15,8 @@ from nautilus_trader.model.identifiers import InstrumentId, Symbol, Venue
 from nautilus_trader.model.instruments import CurrencyPair, Equity, FuturesContract
 from nautilus_trader.model.objects import Price, Quantity
 
+from project_paths import data_root, project_root
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_ROOT = (PROJECT_ROOT / "data").resolve()
 DEFAULT_DATA_TIMEZONE = "America/Chicago"
 REQUIRED_COLUMNS = {"Date", "Open", "High", "Low", "Close", "Volume", "Symbol"}
 _TIMEFRAME_PATTERN = re.compile(
@@ -117,10 +116,11 @@ def parse_timeframe(value: str) -> Timeframe:
 
 def discover_datasets() -> list[LocalDataset]:
     datasets: list[LocalDataset] = []
-    if not DATA_ROOT.is_dir():
+    root = data_root()
+    if not root.is_dir():
         return datasets
 
-    for path in sorted(DATA_ROOT.glob("*.parquet")):
+    for path in sorted(root.glob("*.parquet")):
         parts = path.stem.rsplit("_", 1)
         if len(parts) != 2:
             continue
@@ -275,7 +275,7 @@ def inventory() -> dict:
         for dataset in discover_datasets()
     ]
     return {
-        "data_root": str(DATA_ROOT),
+        "data_root": str(data_root()),
         "tickers": sorted({item["ticker"] for item in datasets}),
         "datasets": datasets,
         "resampling": {
@@ -377,7 +377,7 @@ def load_bars(
         for row in frame.itertuples(index=False)
     ]
     metadata = {
-        "source": str(selection.source.path.relative_to(PROJECT_ROOT)),
+        "source": str(selection.source.path.relative_to(project_root())),
         "ticker": selection.ticker,
         "source_timeframe": source_interval.canonical,
         "timeframe": selection.timeframe.canonical,
